@@ -1,34 +1,26 @@
-import { useState } from 'react';
-import { AlertTriangle, Camera, MapPin, FileText, ArrowLeft, Check, Eye, EyeOff } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { AlertTriangle, Camera, MapPin, FileText, ArrowLeft, Check, Search, Filter, Eye } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from 'react-hot-toast';
+import api from '../services/api';
 
-interface Denuncia {
-  id: number;
-  type: string;
-  description: string;
-  location: string;
-  date: string;
-  status: 'pending' | 'resolved' | 'investigating';
-  protocol: string;
-}
 
 export function Denuncia() {
+  const [activeTab, setActiveTab] = useState<'form' | 'consult'>('form');
   const [formData, setFormData] = useState({
     type: '',
     description: '',
     location: '',
     date: '',
     time: '',
-    photos: [] as File[],
+    photos: [] as string[],
     anonymous: false,
     name: '',
     email: '',
     phone: ''
   });
-
-  const [showHistory, setShowHistory] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const denunciaTypes = [
     'Descarte irregular de lixo',
@@ -39,26 +31,6 @@ export function Denuncia() {
     'Outros'
   ];
 
-  const mockDenuncias: Denuncia[] = [
-    {
-      id: 1,
-      type: 'Descarte irregular de lixo',
-      description: 'Grande quantidade de lixo doméstico acumulada na calçada',
-      location: 'Rua das Flores, 123',
-      date: '2024-03-08',
-      status: 'investigating',
-      protocol: 'DEN-2024-001'
-    },
-    {
-      id: 2,
-      type: 'Lixão clandestino',
-      description: 'Área com entulhos e resíduos de construção',
-      location: 'Avenida Principal, 456',
-      date: '2024-03-07',
-      status: 'pending',
-      protocol: 'DEN-2024-002'
-    }
-  ];
 
   const statusColors = {
     pending: 'bg-yellow-100 text-yellow-800',
@@ -72,7 +44,41 @@ export function Denuncia() {
     resolved: 'Resolvido'
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const resizeImage = (file: File, maxWidth: number = 800, maxHeight: number = 600, quality: number = 0.7): Promise<string> => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        let { width, height } = img;
+        
+        if (width > height) {
+          if (width > maxWidth) {
+            height = (height * maxWidth) / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = (width * maxHeight) / height;
+            height = maxHeight;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const base64 = canvas.toDataURL('image/jpeg', quality);
+        resolve(base64);
+      };
+      
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     const currentCount = formData.photos.length;
     const newFiles = files.slice(0, 3 - currentCount);
@@ -82,16 +88,23 @@ export function Denuncia() {
       return;
     }
     
-    setFormData(prev => ({
-      ...prev,
-      photos: [...prev.photos, ...newFiles]
-    }));
+    const photoPromises = newFiles.map(file => resizeImage(file));
     
-    if (newFiles.length > 0) {
-      toast.success(`${newFiles.length} foto(s) adicionada(s)`, {
-        icon: '📷',
-        duration: 2000,
-      });
+    try {
+      const base64Photos = await Promise.all(photoPromises);
+      setFormData(prev => ({
+        ...prev,
+        photos: [...prev.photos, ...base64Photos]
+      }));
+      
+      if (newFiles.length > 0) {
+        toast.success(`${newFiles.length} foto(s) adicionada(s)`, {
+          icon: '📷',
+          duration: 2000,
+        });
+      }
+    } catch (error) {
+      toast.error('Erro ao processar fotos.');
     }
   };
 
@@ -106,38 +119,58 @@ export function Denuncia() {
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     
     if (!formData.type || !formData.description || !formData.location) {
       toast.error('Por favor, preencha todos os campos obrigatórios.');
       return;
     }
-    
-    const protocol = `DEN-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
-    
+
     toast.loading('Registrando denúncia...');
-    
-    setTimeout(() => {
+
+    await api.post('/complaint', formData).then((response) => {
+      const protocol = response.data.protocol;
       toast.success(`Denúncia registrada com sucesso!\nProtocolo: ${protocol}`, {
         duration: 6000,
         icon: '🚨',
       });
-      
+
       setFormData({
         type: '',
         description: '',
         location: '',
         date: '',
         time: '',
-        photos: [],
+        photos: [] as string[],
         anonymous: false,
         name: '',
         email: '',
         phone: ''
       });
-    }, 1500);
+    }).catch(() => {
+      toast.error('Erro ao registrar denúncia.');
+    });
   };
+
+  const fetchComplaints = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/complaint');
+      setComplaints(response.data);
+      toast.success('Denúncias carregadas com sucesso!');
+    } catch (error) {
+      toast.error('Erro ao carregar denúncias.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'consult') {
+      fetchComplaints();
+    }
+  }, [activeTab]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -155,8 +188,35 @@ export function Denuncia() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
+      <div className="mb-6">
+        <div className="flex gap-4 border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab('form')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              activeTab === 'form'
+                ? 'text-red-600 border-b-2 border-red-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Nova Denúncia
+          </button>
+          <button
+            onClick={() => setActiveTab('consult')}
+            className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
+              activeTab === 'consult'
+                ? 'text-red-600 border-b-2 border-red-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Search className="w-4 h-4" />
+            Consultar Denúncias
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'form' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2">
           <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-md p-6">
             <section className="mb-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Tipo de Infração</h2>
@@ -239,7 +299,7 @@ export function Denuncia() {
                   {formData.photos.map((photo, index) => (
                     <div key={index} className="relative">
                       <img
-                        src={URL.createObjectURL(photo)}
+                        src={photo}
                         alt={`Foto ${index + 1}`}
                         className="w-full h-24 object-cover rounded-lg"
                       />
@@ -310,79 +370,73 @@ export function Denuncia() {
               Enviar Denúncia
             </button>
           </form>
-        </div>
-
-        <div className="lg:col-span-1">
-          <div className="bg-red-50 rounded-lg p-6 mb-6">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-red-600" />
-              Importante
-            </h3>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li>• Forneça informações precisas e detalhadas</li>
-              <li>• Fotos ajudam na comprovação</li>
-              <li>• Denúncias falsas são crime</li>
-              <li>• Você receberá um protocolo para acompanhamento</li>
-            </ul>
           </div>
-
-          <div className="bg-blue-50 rounded-lg p-6 mb-6">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-600" />
-              Acompanhamento
-            </h3>
-            <p className="text-sm text-gray-600 mb-3">
-              Acompanhe o status da sua denúncia pelo protocolo gerado.
-            </p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-semibold text-gray-800">Denúncias Registradas</h2>
             <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors"
+              onClick={fetchComplaints}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
             >
-              {showHistory ? 'Ocultar' : 'Ver'} Minhas Denúncias
+              <Search className="w-4 h-4" />
+              {loading ? 'Carregando...' : 'Atualizar'}
             </button>
           </div>
 
-          <div className="bg-green-50 rounded-lg p-6">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <Check className="w-5 h-5 text-green-600" />
-              Resultados Esperados
-            </h3>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li>• Fiscalização no local</li>
-              <li>• Autuação dos responsáveis</li>
-              <li>• Limpeza da área</li>
-              <li>• Medidas educativas</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      {showHistory && (
-        <div className="mt-8 bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Minhas Denúncias</h2>
-          <div className="space-y-4">
-            {mockDenuncias.map(denuncia => (
-              <div key={denuncia.id} className="border rounded-lg p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h3 className="font-medium text-gray-800">{denuncia.type}</h3>
-                    <p className="text-sm text-gray-600">Protocolo: {denuncia.protocol}</p>
-                  </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[denuncia.status]}`}>
-                    {statusLabels[denuncia.status]}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-600 mb-2">{denuncia.description}</p>
-                <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {denuncia.location}
-                  </span>
-                  <span>{denuncia.date}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          {complaints.length === 0 ? (
+            <div className="text-center py-12">
+              <AlertTriangle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-500">Nenhuma denúncia encontrada.</p>
+              <p className="text-sm text-gray-400 mt-2">As denúncias aparecerão aqui quando forem registradas.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Protocolo</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Tipo</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Descrição</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Local</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Data</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {complaints.map((complaint, index) => (
+                    <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="py-3 px-4">
+                        <span className="font-mono text-sm font-medium">{complaint.protocol}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-sm">{complaint.type}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-sm text-gray-600 line-clamp-2">{complaint.description}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-gray-400" />
+                          <span className="text-sm">{complaint.location}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-sm">{complaint.date}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded ${statusColors[complaint.status as keyof typeof statusColors]}`}>
+                          {statusLabels[complaint.status as keyof typeof statusLabels]}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
